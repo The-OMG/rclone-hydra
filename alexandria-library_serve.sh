@@ -1,20 +1,20 @@
-#!/bin/bash
+#!/bin/sh
 
 ################################################################################
-#### Start multiple instannces of rclone http serve for use with a reverse #####
+#### Start multiple instances of rclone http serve for use with a reverse  #####
 #### proxy webserver.                                                      #####
 ################################################################################
-#							      ___           ___           ___                            #
-#							     /  /\         /__/\         /  /\                           #
-#							    /  /::\       |  |::\       /  /:/_                          #
-#							   /  /:/\:\      |  |:|:\     /  /:/ /\                         #
-#							  /  /:/  \:\   __|__|:|\:\   /  /:/_/::\                        #
-#							 /__/:/ \__\:\ /__/::::| \:\ /__/:/__\/\:\                       #
-#							 \  \:\ /  /:/ \  \:\~~\__\/ \  \:\ /~~/:/                       #
-#							  \  \:\  /:/   \  \:\        \  \:\  /:/                        #
-#							   \  \:\/:/     \  \:\        \  \:\/:/                         #
-#							    \  \::/       \  \:\        \  \::/                          #
-#							     \__\/         \__\/         \__\/                           #
+#                   ___           ___           ___                            #
+#                  /  /\         /__/\         /  /\                           #
+#                 /  /::\       |  |::\       /  /:/_                          #
+#                /  /:/\:\      |  |:|:\     /  /:/ /\                         #
+#               /  /:/  \:\   __|__|:|\:\   /  /:/_/::\                        #
+#              /__/:/ \__\:\ /__/::::| \:\ /__/:/__\/\:\                       #
+#              \  \:\ /  /:/ \  \:\~~\__\/ \  \:\ /~~/:/                       #
+#               \  \:\  /:/   \  \:\        \  \:\  /:/                        #
+#                \  \:\/:/     \  \:\        \  \:\/:/                         #
+#                 \  \::/       \  \:\        \  \::/                          #
+#                  \__\/         \__\/         \__\/                           #
 #                                                                              #
 ################################################################################
 #### rclone credit        : https://github.com/ncw/rclone
@@ -26,54 +26,62 @@
 ###  Install GNU parallel : "brew install parallel"
 ################################################################################
 
-# path to your file containing the acounts you want to use.
-ACCOUNTS="$HOME/scripts/pegasus.txt"
+_Main() {
 
-# path to your file containing the ports you want to use.
-PORTS="$HOME/scripts/ports.txt"
+  TEAMDRIVE_TO_SERVE="TDcartoons-matt07211"
 
-rcloneARGS=(
-  "--stats=30s"
-  "--read-only"
-  "--fast-list"
-  "-vv"
-  "--log-file=${HOME}/logs/alexandria.log"
-)
+  # My rclone remotes are named so that I can grep the Teamdrive name from
+  # multiple accounts and pipe them to the accounts file. You may need to create
+  # your own accounts.txt file manually if your remotes are not setup in this way.
+  ACCOUNTS=$(rclone listremotes | grep ${TEAMDRIVE_TO_SERVE})
+  ACCOUNT_COUNT=$(rclone listremotes | grep -c ${TEAMDRIVE_TO_SERVE})
 
-parallelARGS=(
-  "--link"
-  "--jobs=12"
-  "--delay=3"
-  "--joblog=alexandria-parallel.log"
-  "-X"
-)
+  PORTS=$(seq 10001 +1 100${ACCOUNT_COUNT})
 
-# Remove existing accounts file.
-rm -rf "$ACCOUNTS"
+  # create initial logfile.
+  echo "" "$HOME/logs/rclone-hydra.log"
 
-# Remove existing ports file.
-rm -rf "$PORTS"
+  # Calculate best chunksize for trasnfer speed.
+  AvailableRam=$(free --giga -w | grep Mem | awk '{print $8}')
+  case "$AvailableRam" in
+  [1-9][0-9] | [1-9][0-9][0-9]) driveChunkSize="1024M" ;;
+  [6-9]) driveChunkSize="512M" ;;
+  5) driveChunkSize="256M" ;;
+  4) driveChunkSize="128M" ;;
+  3) driveChunkSize="64M" ;;
+  2) driveChunkSize="32M" ;;
+  [0-1]) driveChunkSize="8M" ;;
+  esac
 
-# My rclone remotes are named so that I can grep the Teamdrive name from
-# multiple accounts and pipe them to the accounts file. You may need to create
-# your own accounts.txt file manually if your remotes are not setup in this way.
- rclone listremotes | grep TDpegasus >>"$ACCOUNTS"
+  rcloneARGS="--buffer-size=0M \
+--cache-chunk-size=10M \
+--cache-db-path=$HOME/.cache/rclone/.rcache \
+--cache-info-age=10m \
+--cache-total-chunk-size=10G \
+--cache-workers=8 \
+--cache-writes \
+--dir-cache-time=4m \
+--drive-chunk-size=${driveChunkSize} \
+--drive-upload-cutoff=${driveChunkSize} \
+--fast-list \
+--low-level-retries=10 \
+--min-size=0 \
+--no-check-certificate \
+--read-only \
+--retries=3 \
+--stats=10s \
+--stats=30s \
+--timeout=300s \
+--tpslimit=6 \
+--umask=002 \
+-vv"
 
-# generating ports file. Since I have 12 remotes to start, this ports file will
-# create 12 ports in sequence. If you have a different amout of remotes to use,
-# modify "10033".
+  parallelARGS="--jobs=${ACCOUNT_COUNT} --link -x"
 
-i=$(wc -l <"$ACCOUNTS")
-for i in 1000{1..9} 100{10..99} ; do
-  echo $i >"$PORTS"
-done
-#seq 10000 +1 10033 >>"$PORTS"
-
-
-# create initial logfile.
-touch "${HOME}/logs/alexandria.log"
-
-# start rclone serve http remotes in a staggered fashion.
-echo parallel "${parallelARGS[@]}" rclone serve http {1}alexandria-library.space \
---addr localhost:{2} "${rcloneARGS[@]}" :::: "$ACCOUNTS" "$PORTS"
-echo "Alexandria started"
+  # start rclone serve http remotes in a staggered fashion.
+  parallel ${parallelARGS} \
+    "rclone serve http {1} --addr localhost:{2} ${rcloneARGS}" \
+    ::: "${ACCOUNTS}" \
+    ::: "${PORTS}"
+}
+_Main @
